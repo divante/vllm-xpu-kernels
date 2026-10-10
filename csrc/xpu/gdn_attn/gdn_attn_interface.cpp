@@ -190,6 +190,14 @@ void gdn_attention(
         "spec_state_indices_tensor must have size [num_spec_decodes, "
         "num_speculative_tokens + 1]");
     num_speculative_tokens = spec_state_indices_tensor->size(1) - 1;
+    const int64_t required_conv_state_len =
+        conv_weights.size(1) - 1 + num_speculative_tokens;
+    TORCH_CHECK(
+        conv_state.size(1) >= required_conv_state_len,
+        "conv_state must have at least ",
+        required_conv_state_len,
+        " rows for speculative decoding, but got ",
+        conv_state.size(1));
     TORCH_CHECK(
         spec_token <= num_spec_decodes * (num_speculative_tokens + 1),
         "spec_token must not exceed the rectangular speculative capacity");
