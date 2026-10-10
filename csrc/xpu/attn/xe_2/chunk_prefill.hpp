@@ -74,7 +74,18 @@ struct chunk_prefill_args_t {
   // per-batch mask: true = prefill, false = decode; nullptr = process all
   void* is_prefill = nullptr;
   int page_stride_elements = 0;
+  // per-sequence causal mask: true = causal, false = bidirectional;
+  // nullptr = all sequences follow the compile-time CausalMask flag.
+  // Used by DiffusionGemma to handle encoder(causal)+denoise(bidir) in one
+  // launch instead of splitting the batch into two FA2 calls.
+  void* per_seq_causal = nullptr;
 };
+
+template <typename Op>
+void chunk_prefill_graph_safe_kernel(typename Op::Params params, char* smem) {
+  Op op;
+  op(params, smem);
+}
 
 template <class FMHAKernel, bool isVarLen>
 struct KernelLauncher {
@@ -174,7 +185,8 @@ struct KernelLauncher {
          reinterpret_cast<ElementQ*>(args.sm_sink),
          args.softmax_lse,
          args.lse_stride,
-         static_cast<const bool*>(args.is_prefill)},
+         static_cast<const bool*>(args.is_prefill),
+         static_cast<const bool*>(args.per_seq_causal)},
         {args.sm_scale,
          args.k_scale,
          args.v_scale,
@@ -218,16 +230,12 @@ struct KernelLauncher {
     const auto sycl_block = compat::dim3(block.x, block.y, block.z);
     const auto sycl_grid = compat::dim3(grid.x, grid.y, grid.z);
 
-    // Launch parameters depend on whether SYCL compiler supports work-group
-    // scratch memory extension
-    compat::experimental::launch_properties launch_props{
-        syclex::work_group_scratch_size(smem_size),
-    };
     compat::experimental::kernel_properties kernel_props{
         syclex::sub_group_size<cute::intel::sg_size>, intelex::grf_size<256>};
     compat::experimental::launch_policy policy{
-        sycl_grid, sycl_block, launch_props, kernel_props};
-    compat::experimental::launch<cutlass::device_kernel<FMHAKernel>>(
+        sycl_grid, sycl_block, kernel_props,
+        compat::experimental::local_mem_size(smem_size)};
+    compat::experimental::launch<chunk_prefill_graph_safe_kernel<FMHAKernel>>(
         policy, queue, params);
   }
 };

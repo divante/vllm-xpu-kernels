@@ -141,9 +141,15 @@ def test_remap_hidden_states(num_rows, hidden_size, total_experts_num, topk,
     if scale_dtype is not None:
         remapped_scales = torch.empty_like(scales).repeat_interleave(topk,
                                                                      dim=0)
-    rows_per_expert = torch.zeros((local_experts_num),
-                                            dtype=torch.int32,
-                                            device=DEVICE)
+    if num_rows * topk <= 256:
+        rows_per_expert = torch.full((local_experts_num,),
+                                     -1,
+                                     dtype=torch.int32,
+                                     device=DEVICE)
+    else:
+        rows_per_expert = torch.zeros((local_experts_num),
+                                      dtype=torch.int32,
+                                      device=DEVICE)
     unpermuted_row_to_permuted_row = torch.empty((num_rows, topk),
                                                  dtype=torch.int32,
                                                  device=DEVICE)

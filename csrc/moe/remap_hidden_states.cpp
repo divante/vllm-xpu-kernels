@@ -81,7 +81,10 @@ class RowsPerExpertCount {
     // ===== Phase 3: global atomic =====
     for (int i = local_id; i < local_experts_num; i += local_range) {
       int count = local_counts[i];
-      if (count > 0) {
+      if (num_rows * TopK <= GroupWorkItem) {
+        rows_per_expert[i] = count;
+        local_counts[i] = 0;
+      } else if (count > 0) {
         auto global_atomic = sycl::atomic_ref<
             int,
             sycl::memory_order_relaxed,

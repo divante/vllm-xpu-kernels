@@ -310,6 +310,7 @@ struct gated_delta_rule_spec_kernel {
       const T* dt_bias,
       StateT* ssm_state,
       const int ssm_state_stride_0,
+      const int* query_start_loc,
       const int* token_indx,
       const int* cache_indices,
       const int cache_indices_stride_0,
@@ -330,6 +331,7 @@ struct gated_delta_rule_spec_kernel {
         dt_bias(dt_bias),
         ssm_state(ssm_state),
         ssm_state_stride_0(ssm_state_stride_0),
+        query_start_loc(query_start_loc),
         token_indx(token_indx),
         cache_indices(cache_indices),
         cache_indices_stride_0(cache_indices_stride_0),
@@ -407,12 +409,12 @@ struct gated_delta_rule_spec_kernel {
       }
     }
 
-    // -- Iterate over the num_spec_tokens tokens of this sequence -------------
-    for (int t_local = 0; t_local < num_spec_tokens; ++t_local) {
-      // Local token index inside q/k/v/b/a (which were sized
-      // num_spec_decodes * num_spec_tokens and ordered by
-      // spec_query_start_loc).
-      const int t = batch_id * num_spec_tokens + t_local;
+    // The final graph-padded sequence can be short. Query starts describe the
+    // compact local q/k/v/b/a layout, whereas num_spec_tokens is only the
+    // cache-index row width used for rollback state slots.
+    const int token_start = query_start_loc[batch_id];
+    const int token_end = query_start_loc[batch_id + 1];
+    for (int t = token_start, t_local = 0; t < token_end; ++t, ++t_local) {
 
       float b_local = b[t * num_v_heads + num_v_heads_id];
       float beta = act_sigmoid(b_local);
@@ -537,6 +539,7 @@ struct gated_delta_rule_spec_kernel {
   const T* dt_bias;
   StateT* ssm_state;
   const int ssm_state_stride_0;
+  const int* query_start_loc;
   const int* token_indx;
   const int* cache_indices;
   const int cache_indices_stride_0;
@@ -616,6 +619,7 @@ void kernel_launcher_spec(
     const T* dt_bias,
     StateT* ssm_state,
     const int ssm_state_stride_0,
+    const int* query_start_loc,
     const int* token_indx,
     const int* cache_indices,
     const int cache_indices_stride_0,
@@ -641,6 +645,7 @@ void kernel_launcher_spec(
         dt_bias,
         ssm_state,
         ssm_state_stride_0,
+        query_start_loc,
         token_indx,
         cache_indices,
         cache_indices_stride_0,
@@ -737,6 +742,7 @@ void gated_delta_rule(
         reinterpret_cast<scalar_t*>(dt_bias.data_ptr()),             \
         reinterpret_cast<state_scalar_t*>(ssm_state.data_ptr()),     \
         ssm_state_stride_0,                                          \
+        reinterpret_cast<int*>(query_start_loc->data_ptr()),         \
         token_indx.has_value()                                       \
             ? reinterpret_cast<int*>(token_indx->data_ptr())         \
             : nullptr,                                               \

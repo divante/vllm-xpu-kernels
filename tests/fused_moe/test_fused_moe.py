@@ -34,6 +34,32 @@ MINI_PYTEST_PARAMS = {
 }
 
 
+@pytest.mark.parametrize("weight_layout", ["nk", "kn"])
+def test_fused_moe_block_fp8_inter_size_uses_scales(weight_layout):
+    weight_nk = torch.empty(
+        2, 512, 256, dtype=torch.float8_e4m3fn, device=DEVICE)
+    weight = (
+        weight_nk.transpose(-1, -2).contiguous()
+        if weight_layout == "kn"
+        else weight_nk
+    )
+    scales = torch.empty(2, 4, 2, dtype=torch.float32, device=DEVICE)
+
+    fused_moe = XpuFusedMoe(
+        w13=weight,
+        w13_scales=scales,
+        w13_bias=None,
+        w2=weight,
+        w2_scales=scales,
+        w2_bias=None,
+        n_experts_per_token=1,
+        activation="silu",
+        num_experts=2,
+    )
+
+    assert fused_moe.inter_size == 256
+
+
 def dequantize_uint4(qweight, scales, group_size):
     import numpy as np
     k = qweight.shape[1] * 2

@@ -121,7 +121,11 @@ std::vector<at::Tensor> mha_varlen_fwd(
     std::optional<int> num_splits,
     bool mix_batch,
     std::optional<at::Tensor>& splits_per_seq,
-    std::optional<at::Tensor>& work_list) {
+    std::optional<at::Tensor>& work_list,
+    // Per-sequence causal mask [num_seqs] bool: true=causal, false=bidir.
+    // When provided, one launch handles a mixed causal/bidirectional batch
+    // (DiffusionGemma encoder+denoise) instead of splitting into 2 FA2 calls.
+    std::optional<const at::Tensor>& per_seq_causal_) {
   auto q_type = q.scalar_type();
   auto k_type = k.scalar_type();
   TORCH_CHECK(
@@ -232,7 +236,8 @@ std::vector<at::Tensor> mha_varlen_fwd(
         is_local,
         is_sink,
         softmax_lse_opt,
-        no_mask);
+        no_mask,
+        per_seq_causal_);
   } else if (max_seqlen_q > 1) {
     if (!out_.has_value()) {
       out = torch::empty_like(q);
@@ -242,6 +247,16 @@ std::vector<at::Tensor> mha_varlen_fwd(
                             cu_seqlens_q.slice(0, 0, batch_size);
     at::Tensor is_prefill_mask = seq_lens_q.gt(1);
     std::optional<const at::Tensor> is_prefill_opt = is_prefill_mask;
+    // Avoid launching the decode kernel for all-prefill mixed batches. The
+    // device-to-host probe is not graph-capturable, so the per-sequence causal
+    // graph path uses its known all-prefill shape while recording.
+    bool capturing = queue.ext_oneapi_get_state() ==
+                     sycl::ext::oneapi::experimental::queue_state::recording;
+    bool has_decode = false;
+    if (!(capturing && per_seq_causal_.has_value())) {
+      has_decode = (seq_lens_q.numel() > 0) &&
+                   (seq_lens_q.eq(1).any().item<bool>());
+    }
 
     cutlass_chunk_prefill_interface(
         queue,
@@ -266,15 +281,18 @@ std::vector<at::Tensor> mha_varlen_fwd(
         is_local,
         is_sink,
         softmax_lse_opt,
-        is_prefill_opt);
+        is_prefill_opt,
+        per_seq_causal_);
 
-    // Paged decode: processes only decode batches (skips prefill)
-    int eff_window_left =
-        window_size_left == -1 ? max_seqlen_k : window_size_left;
-    int eff_window_right =
-        window_size_right == -1 ? max_seqlen_k : window_size_right;
-    int effective_seqlen_k =
-        is_local ? std::min(max_seqlen_k, eff_window_left + 1) : max_seqlen_k;
+    if (has_decode) {
+      // Paged decode: processes only decode batches (skips prefill)
+      int eff_window_left =
+          window_size_left == -1 ? max_seqlen_k : window_size_left;
+      int eff_window_right =
+          window_size_right == -1 ? max_seqlen_k : window_size_right;
+      int effective_seqlen_k = is_local
+                                   ? std::min(max_seqlen_k, eff_window_left + 1)
+                                   : max_seqlen_k;
 
     int num_tokens = batch_size;
     int num_heads_q = q.size(1);
@@ -320,6 +338,7 @@ std::vector<at::Tensor> mha_varlen_fwd(
         is_prefill_opt,
         splits_per_seq,
         work_list);
+    }
   } else {
     // Normalize -1 (unbounded) to max_seqlen_k for kernel masking logic
     // In decode phase the window_size_right doesn't have effect
@@ -448,7 +467,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
       "bool is_causal, int window_size_left, int window_size_right, float "
       "softcap, bool return_softmax, "
       "Generator? gen, int? num_splits, bool mix_batch, Tensor? "
-      "splits_per_seq, Tensor? work_list) -> Tensor[]");
+      "splits_per_seq, Tensor? work_list, Tensor? per_seq_causal) -> Tensor[]");
   ops.impl(
       "varlen_fwd",
       torch::kXPU,

@@ -29,7 +29,8 @@ void cutlass_chunk_prefill_interface(
     bool is_local,
     bool is_sink,
     std::optional<at::Tensor>& softmax_lse,
-    std::optional<const at::Tensor>& is_prefill) {
+    std::optional<const at::Tensor>& is_prefill,
+    std::optional<const at::Tensor>& per_seq_causal) {
   if (vllm::xpu::is_xe2_arch() || vllm::xpu::is_xe3_arch()) {
 #ifdef VLLM_XPU_ENABLE_XE2
     // Use XE2 cutlass kernel (also used as WA for XE3/XE3P)
@@ -56,7 +57,8 @@ void cutlass_chunk_prefill_interface(
         is_local,
         is_sink,
         softmax_lse,
-        is_prefill);
+        is_prefill,
+        per_seq_causal);
 #else
     TORCH_CHECK(false, "XE2 cutlass kernel is not enabled in this build.");
 #endif

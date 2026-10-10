@@ -23,4 +23,5 @@ void cutlass_chunk_prefill_xe2(
     bool is_local,
     bool is_sink,
     std::optional<at::Tensor>& softmax_lse,
-    std::optional<const at::Tensor>& is_prefill);
+    std::optional<const at::Tensor>& is_prefill,
+    std::optional<const at::Tensor>& per_seq_causal);

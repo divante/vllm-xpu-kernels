@@ -139,6 +139,10 @@ struct chunk_policy_head512_b16 {
 };
 
 // define decode policy
+template <typename head_dim>
+using decode_v_tile_t =
+    cute::conditional_t<(head_dim::value > 256), _256, head_dim>;
+
 template <typename q_packed, typename head_dim, typename kv_tile>
 struct decode_policy_qpacked_head {
   static_assert(
@@ -153,7 +157,7 @@ template <typename q_packed, typename head_dim>
 struct decode_policy_qpacked_head<q_packed, head_dim, _16> {
   using ShapeQK = Shape<q_packed, _16, _64>;
   using ShapePV = Shape<q_packed, _32, _16>;
-  using ShapeOut = Shape<q_packed, head_dim>;
+  using ShapeOut = Shape<q_packed, decode_v_tile_t<head_dim>>;
   using SubgroupLayoutQK = Layout<Shape<_1, _1, _1>>;
 };
 
@@ -162,7 +166,7 @@ template <typename q_packed, typename head_dim>
 struct decode_policy_qpacked_head<q_packed, head_dim, _32> {
   using ShapeQK = Shape<q_packed, _32, _64>;
   using ShapePV = Shape<q_packed, _32, _32>;
-  using ShapeOut = Shape<q_packed, head_dim>;
+  using ShapeOut = Shape<q_packed, decode_v_tile_t<head_dim>>;
   using SubgroupLayoutQK = Layout<Shape<_1, _2, _1>>;
 };
 
@@ -174,7 +178,7 @@ template <typename q_packed, typename head_dim>
 struct decode_policy_qpacked_head<q_packed, head_dim, _64> {
   using ShapeQK = Shape<q_packed, _64, _64>;
   using ShapePV = Shape<q_packed, _32, _64>;
-  using ShapeOut = Shape<q_packed, head_dim>;
+  using ShapeOut = Shape<q_packed, decode_v_tile_t<head_dim>>;
   using SubgroupLayoutQK = Layout<Shape<_1, _4, _1>>;
 };
 
@@ -190,6 +194,6 @@ template <typename q_packed, typename head_dim>
 struct decode_policy_qpacked_head<q_packed, head_dim, _128> {
   using ShapeQK = Shape<q_packed, _128, _64>;
   using ShapePV = Shape<q_packed, _32, _128>;
-  using ShapeOut = Shape<q_packed, head_dim>;
+  using ShapeOut = Shape<q_packed, decode_v_tile_t<head_dim>>;
   using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
 };

@@ -190,6 +190,9 @@ void gdn_attention(
         "spec_state_indices_tensor must have size [num_spec_decodes, "
         "num_speculative_tokens + 1]");
     num_speculative_tokens = spec_state_indices_tensor->size(1) - 1;
+    TORCH_CHECK(
+        spec_token <= num_spec_decodes * (num_speculative_tokens + 1),
+        "spec_token must not exceed the rectangular speculative capacity");
 
     TORCH_CHECK(
         num_accepted_tokens->is_contiguous(),
@@ -205,7 +208,8 @@ void gdn_attention(
         "num_accepted_tokens size must be num_spec_decodes");
   }
 
-  TORCH_CHECK(spec_token == num_spec_decodes * (num_speculative_tokens + 1));
+  // Ragged speculative batches may contain fewer tokens than the rectangular
+  // num_spec_decodes * (num_speculative_tokens + 1) upper bound.
   TORCH_CHECK(non_spec_token + spec_token == num_actual_tokens);
 
   // check core_attn_out / z / projected_states_{qkvz,ba} shapes.

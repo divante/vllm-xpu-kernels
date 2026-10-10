@@ -271,7 +271,9 @@ struct FMHAFwdMainloop<
       int seq_len,
       int full_tile_offset,
       int blk_local_l_safe,
-      int blk_local_r_safe) {
+      int blk_local_r_safe,
+      bool seq_is_causal = true,
+      bool is_per_seq_bidir = false) {
     using namespace sycl::ext::oneapi::this_work_item;
 
     // Short dimension names:
@@ -474,12 +476,14 @@ struct FMHAFwdMainloop<
           Tensor gP = local_tile(
               cPgP, take<0, 2>(TileShapeQK{}), make_coord(get<0>(blk_qv), K));
           auto cS_thread = thr_mma_qk.partition_C(gP);
+          const int eff_right =
+              is_per_seq_bidir ? params.local_left : params.local_right;
           CUTLASS_PRAGMA_UNROLL
           for (int i = 0; i < tSrS.size(); ++i) {
             int row_idx = get<0>(cS_thread(i));
             int col_idx = get<1>(cS_thread(i)) - full_tile_offset;
             bool left_mask = col_idx < row_idx - params.local_left;
-            bool right_mask = col_idx > row_idx + params.local_right;
+            bool right_mask = col_idx > row_idx + eff_right;
             if (left_mask || right_mask) {
               tSrS(i) = ElementS(-INFINITY);
             }

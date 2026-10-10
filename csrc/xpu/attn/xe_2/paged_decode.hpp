@@ -143,6 +143,12 @@ struct paged_decode_args_t {
   int page_stride_elements = 0;
 };
 
+template <typename Op>
+void paged_decode_graph_safe_kernel(typename Op::Params params, char* smem) {
+  Op op;
+  op(params, smem);
+}
+
 template <class FMHAKernel, class ReductionSplitKernel, bool isVarLen>
 struct DecodeKernelLauncher {
   using StrideQ = typename FMHAKernel::StrideQ;
@@ -418,16 +424,12 @@ struct DecodeKernelLauncher {
     const auto sycl_block = compat::dim3(block.x, block.y, block.z);
     const auto sycl_grid = compat::dim3(grid.x, grid.y, grid.z);
 
-    // Launch parameters depend on whether SYCL compiler supports work-group
-    // scratch memory extension
-    compat::experimental::launch_properties launch_props{
-        syclex::work_group_scratch_size(smem_size),
-    };
     compat::experimental::kernel_properties kernel_props{
         syclex::sub_group_size<cute::intel::sg_size>, intelex::grf_size<256>};
     compat::experimental::launch_policy policy{
-        sycl_grid, sycl_block, launch_props, kernel_props};
-    compat::experimental::launch<cutlass::device_kernel<FMHAKernel>>(
+        sycl_grid, sycl_block, kernel_props,
+        compat::experimental::local_mem_size(smem_size)};
+    compat::experimental::launch<paged_decode_graph_safe_kernel<FMHAKernel>>(
         policy, queue, params);
 
     // event.wait();
@@ -439,17 +441,14 @@ struct DecodeKernelLauncher {
       const auto reduce_sycl_block = compat::dim3(block.x, block.y, block.z);
       const auto reduce_sycl_grid =
           compat::dim3(reduce_grid.x, reduce_grid.y, reduce_grid.z);
-      compat::experimental::launch_properties launch_props_reduce{
-          syclex::work_group_scratch_size(reduce_smem_size),
-      };
       compat::experimental::launch_policy reduce_policy{
           reduce_sycl_grid,
           reduce_sycl_block,
-          launch_props_reduce,
-          kernel_props};
+          kernel_props,
+          compat::experimental::local_mem_size(reduce_smem_size)};
 
       compat::experimental::launch<
-          cutlass::device_kernel<ReductionSplitKernel>>(
+          paged_decode_graph_safe_kernel<ReductionSplitKernel>>(
           reduce_policy, queue, reduce_params);
       // reduce_event.wait();
     }

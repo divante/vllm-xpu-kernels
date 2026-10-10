@@ -17,14 +17,15 @@ from .moe_utils import quant_act_xpu, ref_fused_moe
 
 REF_FUSED_MOE_ENV = "VLLM_XPU_FUSED_MOE_USE_REF"
 USE_MXFP4_FP8_ENV = "VLLM_XPU_FUSED_MOE_USE_MXFP4_FP8"
+FP8_BLOCK_SIZE = 128
 
 def _is_env_enabled(env_name: str, default: str = "0") -> bool:
     value = os.environ.get(env_name, default).strip().upper()
     return value in ("1", "ON", "TRUE", "YES", "Y")
 
 
-def _should_use_ref_fused_moe(is_mxfp8: bool, is_block_fp8: bool) -> bool:  
-    if is_mxfp8 or is_block_fp8:
+def _should_use_ref_fused_moe(is_mxfp8: bool) -> bool:
+    if is_mxfp8:
         return True
     return _is_env_enabled(REF_FUSED_MOE_ENV)
 
@@ -58,6 +59,14 @@ def _get_weights_dtype(weight, scales):
     is_fp8 = is_fp8 and not is_mxfp8 and not is_block_fp8
 
     return is_fp8, is_int4, is_mxfp4, is_mxfp8, is_block_fp8
+
+
+def _get_inter_size(w13, w13_scales, is_int4, is_mxfp4, is_block_fp8):
+    if is_block_fp8:
+        return w13_scales.shape[-2] * FP8_BLOCK_SIZE // 2
+    if is_int4 or is_mxfp4:
+        return w13.shape[-2] // 2
+    return w13.shape[-1] // 2
 
 
 def cutlass_grouped_gemm(input_A, input_A_scale, input_B, input_B_scale, bias,
@@ -178,12 +187,9 @@ class XpuFusedMoe:
          is_mxfp8, 
          is_block_fp8) = _get_weights_dtype(w13, w13_scales)
 
-        # 4bits support [E, N, K]
-        # other types [E, K, N]
-        if not is_int4 and not is_mxfp4:
-            self.inter_size = w13.shape[-1] // 2
-        else:
-            self.inter_size = w13.shape[-2] // 2
+        self.inter_size = _get_inter_size(
+            w13, w13_scales, is_int4, is_mxfp4, is_block_fp8
+        )
 
         # FIXME: move this to vllm
         if is_int4 and not hasattr(w13, 'xpu_fused_moe'):
@@ -229,7 +235,7 @@ class XpuFusedMoe:
         self.gemm1_clamp_limit = gemm1_clamp_limit
         self.recipe = _get_recipe(is_fp8, is_mxfp8, is_mxfp4, is_int4,
                                    is_block_fp8)
-        self._use_ref = _should_use_ref_fused_moe(is_mxfp8, is_block_fp8)
+        self._use_ref = _should_use_ref_fused_moe(is_mxfp8)
         if self.activation == "silu":
             self.act_func = torch.ops._C.silu_and_mul
         elif self.activation == "gelu":
@@ -337,9 +343,11 @@ class XpuFusedMoe:
             (num_rows * self.n_experts_per_token, hidden_size),
             dtype=hidden_states.dtype,
             device=hidden_states.device)
-        rows_per_expert = torch.zeros((self.num_experts),
-                                                dtype=torch.int32,
-                                                device=hidden_states.device)
+        rows_per_expert = torch.empty((self.num_experts),
+                                      dtype=torch.int32,
+                                      device=hidden_states.device)
+        if num_moe_inputs > 256:
+            rows_per_expert.zero_()
         unpermuted_row_to_permuted_row = torch.empty(
             (num_rows, self.n_experts_per_token),
             dtype=torch.int32,
@@ -483,12 +491,9 @@ def xpu_fused_moe(hidden_states,
         output.copy_(out)
         return output
 
-    # 4bits support [E, N, K]
-    # other types [E, K, N]
-    if not is_int4 and not is_mxfp4:
-        inter_size = list(w13.shape)[-1] // 2
-    else:
-        inter_size = list(w13.shape)[-2] // 2
+    inter_size = _get_inter_size(
+        w13, w13_scales, is_int4, is_mxfp4, is_block_fp8
+    )
 
     assert w13.is_contiguous() and w2.is_contiguous()
 
